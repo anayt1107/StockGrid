@@ -1,0 +1,27 @@
+# Builds StockGrid.app and publishes a GitHub release whenever a version tag (v1.2.3) is pushed.
+# Running apps pick the release up through their auto-updater.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app
+        env:
+          STOCKGRID_REPO: ${{ github.repository }}
+          ZIP: "1"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" ./build.sh
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          gh release create "$GITHUB_REF_NAME" "StockGrid-$VERSION.zip" \
+            --title "StockGrid $VERSION" --notes "${NOTES:-StockGrid $VERSION}"

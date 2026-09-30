@@ -1,0 +1,5 @@
+StockGrid.app/
+.build/
+*.zip
+__pycache__/
+.DS_Store
