@@ -16,6 +16,8 @@ It downloads the latest release into `/Applications` and opens it. Run it again 
 
 To install by hand instead, download `StockGrid-x.y.z.zip` from the [Releases](https://github.com/anayt1107/StockGrid/releases/latest) page, unzip it, and drag **StockGrid** to Applications. The app isn't notarized by Apple, so the first time you open it, right-click it and choose **Open**.
 
+The first time StockGrid opens on a Mac, it asks for the group's Stock Market Game username and password. After that it stays unlocked on that Mac. The login is checked inside the app, so treat it as a simple lock rather than real security.
+
 ## Updates
 
 StockGrid checks for a new release shortly after it opens and every 6 hours. When one is available it asks **Install and Relaunch**, then downloads the new version, replaces itself and reopens. You can also check yourself with **StockGrid › Check for Updates…**. Your watchlist, trades and sync settings are kept across updates.

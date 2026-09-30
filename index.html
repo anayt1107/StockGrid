@@ -270,6 +270,16 @@ tr.lots table td, tr.lots table th { border-bottom-color: var(--line); }
 .sync-body { display: grid; gap: 12px; font-size: 13px; }
 .sync-body p { margin: 0; }
 .steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+body.locked > :not(#gate) { display: none !important; }
+#gate { min-height: 100vh; display: grid; place-items: center; }
+body:not(.locked) #gate { display: none; }
+.gate-card { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; display: grid; gap: 14px; }
+.gate-card h1 { font-size: 34px; }
+.gate-card p { margin: 0; color: var(--muted); font-size: 13px; }
+.gate-card label { display: grid; gap: 4px; font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.gate-card input { font: 500 15px var(--f-mono); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); width: 100%; }
+.gate-card input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gate-card .btn { padding: 10px; }
 .toast {
   position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 10;
   background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 13px; max-width: calc(100vw - 32px);
@@ -277,7 +287,17 @@ tr.lots table td, tr.lots table th { border-bottom-color: var(--line); }
 }
 </style>
 </head>
-<body>
+<body class="locked">
+<div id="gate">
+  <form class="gate-card" id="gateForm" novalidate>
+    <h1>Stock<span style="color:var(--accent)">Grid</span></h1>
+    <p>Sign in once with your Stock Market Game login to unlock StockGrid on this Mac.</p>
+    <label>Username <input id="gUser" autocomplete="username" spellcheck="false" autocapitalize="characters"></label>
+    <label>Password <input id="gPass" type="password" autocomplete="current-password"></label>
+    <div class="terr" id="gErr" role="alert"></div>
+    <button class="btn" type="submit">Unlock</button>
+  </form>
+</div>
 <div class="wrap">
   <header>
     <h1>Stock<span>Grid</span></h1>
@@ -435,6 +455,48 @@ let tab = "overview";
 const chartCache = new Map(); // "SYM|range" -> {data}|{error}
 const dailyCache = new Map(); // SYM -> Promise<{data}|{error}>
 const cards = new Map();      // SYM -> element
+
+// ================= one-time login =================
+// Only a SHA-256 of the login is stored here, never the password. It's a simple lock, not real security.
+const GATE_HASH = "171f03d575332b88e5cdeeb2f73d01b4602d9df811ea46e5f52c00e25cf2e86b";
+function sha256Hex(msg) {
+  const primes = [];
+  for (let c = 2; primes.length < 64; c++) if (primes.every((p) => c % p)) primes.push(c);
+  const frac = (x) => ((x - Math.floor(x)) * 4294967296) >>> 0;
+  const K = primes.map((p) => frac(Math.cbrt(p))), H = primes.slice(0, 8).map((p) => frac(Math.sqrt(p)));
+  const bytes = Array.from(new TextEncoder().encode(msg)), bitLen = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let i = 7; i >= 0; i--) bytes.push(i >= 4 ? 0 : (bitLen >>> (8 * i)) & 0xff);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n)), W = new Array(64);
+  for (let off = 0; off < bytes.length; off += 64) {
+    for (let t = 0; t < 16; t++) W[t] = ((bytes[off + 4 * t] << 24) | (bytes[off + 4 * t + 1] << 16) | (bytes[off + 4 * t + 2] << 8) | bytes[off + 4 * t + 3]) >>> 0;
+    for (let t = 16; t < 64; t++) {
+      const s0 = rotr(W[t - 15], 7) ^ rotr(W[t - 15], 18) ^ (W[t - 15] >>> 3), s1 = rotr(W[t - 2], 17) ^ rotr(W[t - 2], 19) ^ (W[t - 2] >>> 10);
+      W[t] = (W[t - 16] + s0 + W[t - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let t = 0; t < 64; t++) {
+      const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[t] + W[t]) >>> 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    [a, b, c, d, e, f, g, h].forEach((v, i) => { H[i] = (H[i] + v) >>> 0; });
+  }
+  return H.map((x) => x.toString(16).padStart(8, "0")).join("");
+}
+const unlocked = () => store.get("sg.unlocked", null) === GATE_HASH.slice(0, 16);
+if (unlocked()) document.body.classList.remove("locked");
+else setTimeout(() => $("#gUser").focus(), 0);
+$("#gateForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const h = sha256Hex(`stockgrid|${$("#gUser").value.trim().toUpperCase()}|${$("#gPass").value}`);
+  if (h !== GATE_HASH) { $("#gErr").textContent = "That username and password don't match. Check them and try again."; $("#gPass").select(); return; }
+  store.set("sg.unlocked", GATE_HASH.slice(0, 16));
+  $("#gPass").value = "";
+  document.body.classList.remove("locked");
+  window.dispatchEvent(new Event("resize")); // redraw charts that loaded while hidden
+});
 
 // ================= parsing =================
 function parse(text) {
@@ -1826,6 +1888,7 @@ $("#clearAll").addEventListener("click", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
+  if (document.body.classList.contains("locked")) return;
   const inField = e.target.matches("textarea, input, select");
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.target.id === "symbols") { e.preventDefault(); addFromBox(); return; }
   if (e.key === "Escape") {
