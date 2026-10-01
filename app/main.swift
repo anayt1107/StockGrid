@@ -430,6 +430,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc func refreshData(_ sender: Any?) {
         webView.evaluateJavaScript("window.stockgridRefresh && window.stockgridRefresh()")
     }
+    @objc func findStocks(_ sender: Any?) {
+        webView.evaluateJavaScript("window.stockgridFind && window.stockgridFind()")
+    }
     @objc func reloadPage(_ sender: Any?) {
         let ucc = webView.configuration.userContentController
         ucc.removeAllUserScripts()
@@ -473,6 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let reload = view.addItem(withTitle: "Reload App", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         reload.keyEquivalentModifierMask = [.command, .shift]
         view.addItem(.separator())
+        view.addItem(withTitle: "Search Stocks", action: #selector(findStocks(_:)), keyEquivalent: "f")
         view.addItem(withTitle: "Keyboard Shortcuts", action: #selector(showShortcuts(_:)), keyEquivalent: "/")
         view.addItem(.separator())
         let fs = view.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")

@@ -82,6 +82,15 @@ textarea:focus-visible, button:focus-visible, select:focus-visible, .card:focus-
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 .seg button sup { font-size: 9px; opacity: .55; margin-left: 2px; }
+.search { position: relative; display: flex; align-items: center; }
+.search input {
+  width: 200px; font: 500 13px var(--f-body); padding: 7px 10px 7px 30px; border-radius: 8px; border: 1px solid var(--line);
+  color: var(--ink); background: var(--panel) no-repeat 10px 50% / 13px 13px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b98a7' stroke-width='2'%3E%3Ccircle cx='7' cy='7' r='5'/%3E%3Cpath d='M11 11l4 4'/%3E%3C/svg%3E");
+}
+.search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search-count { position: absolute; right: 30px; font: 11px var(--f-mono); color: var(--muted); pointer-events: none; }
+@media (max-width: 860px) { .search { flex: 1 1 100%; } .search input { width: 100%; } }
 .btn { border: 0; background: var(--accent); color: var(--accent-ink); font: 600 13px var(--f-body); padding: 8px 16px; border-radius: 8px; cursor: pointer; }
 .btn.ghost { background: var(--panel); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
 .btn.icon { padding: 8px 11px; }
@@ -325,6 +334,10 @@ body:not(.locked) #gate { display: none; }
       <div class="parsed" id="parsed" aria-live="polite"></div>
     </div>
     <div class="controls">
+      <div class="search">
+        <input id="search" type="search" placeholder="Search stocks" aria-label="Search added stocks by ticker or company name" autocomplete="off" spellcheck="false">
+        <span id="searchCount" class="search-count" aria-live="polite"></span>
+      </div>
       <div class="seg" id="ranges" role="group" aria-label="Timeframe"></div>
       <select id="sort" aria-label="Sort cards">
         <option value="input">Order pasted</option>
@@ -345,6 +358,7 @@ body:not(.locked) #gate { display: none; }
 
   <div class="tape" id="tape" hidden></div>
   <div class="grid" id="grid"></div>
+  <div class="empty" id="noMatch" hidden></div>
   </div>
   <div class="foot">Prices from Yahoo Finance, may be delayed. Signals are mechanical readings of daily technical indicators, not financial advice.</div>
 </div>
@@ -361,7 +375,8 @@ body:not(.locked) #gate { display: none; }
     <div><kbd>T</kbd></div><div>Switch between Overview and TradingView</div>
     <div><kbd>S</kbd></div><div>Cycle sort order</div>
     <div><kbd>R</kbd></div><div>Refresh prices</div>
-    <div><kbd>/</kbd></div><div>Edit the symbol list</div>
+    <div><kbd>F</kbd> or <kbd>⌘</kbd> <kbd>F</kbd></div><div>Search added stocks (Enter opens the first match, Esc clears)</div>
+    <div><kbd>/</kbd></div><div>Jump to the paste box</div>
     <div><kbd>⌘</kbd> <kbd>Enter</kbd></div><div>Add the pasted symbols to the grid</div>
     <div><kbd>W</kbd> <kbd>B</kbd></div><div>Show Watchlist / Bought</div>
     <div><kbd>N</kbd></div><div>New trade (for the expanded stock, if one is open)</div>
@@ -583,6 +598,7 @@ async function loadAll(force) {
       fillCard(s);
       updateTape();
       applySort();
+      applySearch();
       if (pendingOpen === s) { pendingOpen = null; toggleOpen(s, s); }
     }
   };
@@ -1161,7 +1177,7 @@ function setTab(t) {
   if (t === "tv") mountTradingView(el); else drawDetailCharts(el);
 }
 function stepOpen(dir) {
-  const order = [...$("#grid").querySelectorAll(".card:not(.err)")].map((e) => e.dataset.sym);
+  const order = [...$("#grid").querySelectorAll(".card:not(.err):not([hidden])")].map((e) => e.dataset.sym);
   if (!order.length) return;
   const i = openSym ? order.indexOf(openSym) : -1;
   const j = i < 0 ? (dir > 0 ? 0 : order.length - 1) : (i + dir + order.length) % order.length;
@@ -1827,6 +1843,40 @@ $("#syncDlg").addEventListener("click", (e) => {
 $("#syncBtn").addEventListener("click", () => { renderSyncUI(); $("#syncDlg").showModal(); });
 setInterval(() => { if ($("#syncDlg").open) renderSyncUI(); }, 15000);
 
+// ================= search =================
+let query = "";
+function cardMatches(sym) {
+  if (!query) return true;
+  const q = query.toUpperCase(), name = (cards.get(sym)?._chart?.data?.name || "").toUpperCase();
+  return sym.includes(q) || name.includes(q);
+}
+function applySearch() {
+  let shown = 0;
+  for (const s of symbols) {
+    const el = cards.get(s); if (!el) continue;
+    const m = cardMatches(s);
+    el.hidden = !m;
+    if (m) shown++;
+  }
+  $("#searchCount").textContent = query ? `${shown} of ${symbols.length}` : "";
+  const nm = $("#noMatch");
+  nm.hidden = !query || shown > 0 || !symbols.length;
+  if (!nm.hidden) nm.textContent = `No added stocks match "${query}". Paste it in the box above to add it.`;
+}
+function focusSearch() { setView("watch"); $("#search").focus(); $("#search").select(); }
+window.stockgridFind = focusSearch; // used by the desktop app's ⌘F menu item
+$("#search").addEventListener("input", (e) => { query = e.target.value.trim(); applySearch(); });
+$("#search").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const first = [...$("#grid").querySelectorAll(".card:not([hidden]):not(.err)")][0];
+    if (first) { e.target.blur(); toggleOpen(first.dataset.sym, first.dataset.sym); }
+  } else if (e.key === "Escape" && e.target.value) {
+    e.preventDefault(); e.stopPropagation();
+    e.target.value = ""; query = ""; applySearch();
+  }
+});
+
 // ================= actions =================
 function render() {
   const grid = $("#grid");
@@ -1845,6 +1895,7 @@ function render() {
     grid.append(el);
   }
   updateTape();
+  applySearch();
 }
 function run(force = false) {
   render();
@@ -1939,6 +1990,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "s" || k === "S") cycleSort();
   else if (k === "r" || k === "R") run(true);
   else if (k === "/") $("#symbols").focus();
+  else if (k === "f" || k === "F") focusSearch();
   else if (k === "?") $("#keys").showModal();
   else if (k === "Enter" && e.target.classList?.contains("card")) toggleOpen(e.target.dataset.sym);
   else return;
