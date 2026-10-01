@@ -855,7 +855,7 @@ function lineChart(el, o) {
   for (const hl of o.hlines || []) svg += `<line x1="0" x2="${iw}" y1="${y(hl.y)}" y2="${y(hl.y)}" stroke="${hl.color || "var(--muted)"}" stroke-dasharray="${hl.dash || "2 3"}" stroke-opacity=".7" fill="none"/>`;
   o.series.forEach((s, k) => {
     if (s.kind === "bars") {
-      const bw = Math.max(1, iw / n * 0.7);
+      const bw = Math.max(1, Math.min(28, iw / n * 0.7));
       s.y.forEach((v, i) => { if (v == null) return; const y0 = y(0), y1 = y(v);
         svg += `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${Math.min(y0, y1).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, Math.abs(y1 - y0)).toFixed(1)}" fill="${s.barColor ? s.barColor(v) : s.color}" fill-opacity=".6"/>`; });
       return;
@@ -1372,16 +1372,27 @@ async function renderPortfolio(force) {
   const ranked = gl.filter((g) => g.pct != null).sort((a, b) => b.pct - a.pct);
   const cls = (v) => v >= 0 ? "up-t" : "down-t";
 
-  // ---- tiles ----
+  // ---- tiles (daily gain/loss) ----
+  const S = pnlSeries(data);
+  const dayLabel = (i) => new Date(S.t[i] * 1000).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+  const dayTile = (k, i) => i < 0 || !S ? [k, "—", "Not enough history yet"]
+    : [k, `<span class="${cls(S.daily[i])}">${money(S.daily[i], true)}</span>`, `<span class="${cls(S.daily[i])}">${fmtPct(S.pct[i])}</span> · ${dayLabel(i)}`];
+  const n = S ? S.daily.length : 0;
   const tiles = [
     ["Market value", money(longMV - shortMV), `Long ${money(longMV)} · Short ${money(shortMV)}`],
-    ["Unrealized gain", `<span class="${cls(unreal)}">${money(unreal, true)}</span>`, cost ? `<span class="${cls(unreal)}">${fmtPct(unreal / cost * 100)}</span> on ${money(cost)} cost` : "No open positions"],
-    ["Today", `<span class="${cls(day)}">${money(day, true)}</span>`, prevMV ? `<span class="${cls(day)}">${fmtPct(day / prevMV * 100)}</span> last session` : "—"],
-    ["Realized gain", `<span class="${cls(realized)}">${money(realized, true)}</span>`, realizedCost ? `${fmtPct(realized / realizedCost * 100)} on ${closedLots.length} closed lot${closedLots.length === 1 ? "" : "s"}` : "Nothing closed yet"],
-    ["Total gain", `<span class="${cls(unreal + realized)}">${money(unreal + realized, true)}</span>`, "Unrealized + realized"],
+    dayTile(S && isoDay(todayISO()) === S.cal[n - 1] ? "Today" : "Last session", n - 1),
+    dayTile("Previous session", n - 2),
   ];
-  if (ranked.length) tiles.push(["Best / worst", `<span class="${cls(ranked[0].pct)}">${esc(ranked[0].sym)} ${fmtPct(ranked[0].pct, 1)}</span>`,
-    `Worst <span class="${cls(last(ranked).pct)}">${esc(last(ranked).sym)} ${fmtPct(last(ranked).pct, 1)}</span>`]);
+  if (S) {
+    const best = S.daily.indexOf(Math.max(...S.daily)), worst = S.daily.indexOf(Math.min(...S.daily));
+    const avg = S.daily.reduce((a, v) => a + v, 0) / n, ups = S.daily.filter((v) => v > 0).length, downs = S.daily.filter((v) => v < 0).length;
+    tiles.push(dayTile("Best day", best), dayTile("Worst day", worst),
+      ["Average day", `<span class="${cls(avg)}">${money(avg, true)}</span>`, `<span class="up-t">${ups} up</span> · <span class="down-t">${downs} down</span> of ${n} day${n === 1 ? "" : "s"}`]);
+  }
+  const movers = gl.filter((g) => g.dayPct != null).sort((a, b) => b.day - a.day);
+  if (movers.length) tiles.push(["Top / bottom today",
+    `<span class="${cls(movers[0].day)}">${esc(movers[0].sym)} ${money(movers[0].day, true)}</span>`,
+    `Bottom <span class="${cls(last(movers).day)}">${esc(last(movers).sym)} ${money(last(movers).day, true)}</span>`]);
 
   // ---- holdings table ----
   const holdRows = gl.map((g) => {
@@ -1444,7 +1455,7 @@ async function renderPortfolio(force) {
 
   body.innerHTML = `
     <div class="tiles">${tiles.map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("")}</div>
-    <div class="panel"><div class="h4">Total gain over time <span class="legend"><span style="--c:var(--accent)">Unrealized + realized, from daily closes</span></span></div><div class="plot pfplot"></div></div>
+    <div class="panel"><div class="h4">Daily gain / loss <span class="legend"><span style="--c:var(--up)">Gain</span><span style="--c:var(--down)">Loss</span></span></div><div class="plot pfplot"></div></div>
     ${gl.length ? `<div class="panel"><div class="h4">Open positions · click a row for its lots</div><div class="tbl-wrap"><table class="hold">
       <thead><tr><th>Symbol</th><th>Side</th><th class="n">Shares</th><th class="n">Avg entry</th><th class="n">Price</th><th class="n">Today</th>
       <th class="n">Value</th><th class="n">Gain</th><th class="n">Weight</th><th>Signal</th><th></th></tr></thead><tbody>${holdRows}</tbody></table></div></div>` : ""}
@@ -1467,38 +1478,51 @@ new ResizeObserver(() => { clearTimeout(pfRt); pfRt = setTimeout(() => {
   if (el && pfLastData && el.clientWidth) drawPnl(el, pfLastData);
 }, 120); }).observe($("#pfBody"));
 
-function drawPnl(el, data) {
+// Portfolio gain/loss for each trading day since the first trade, from daily closes.
+// pct is that day's change relative to what was invested going into the day.
+function pnlSeries(data) {
   const all = lots.filter((l) => data[l.sym]);
-  if (!all.length) { el.innerHTML = `<div class="status">Price history unavailable.</div>`; return; }
+  if (!all.length) return null;
   const start = Math.min(...all.map((l) => isoDay(l.date)));
-  const series = {};
-  const days = new Set();
-  for (const s of new Set(all.map((l) => l.sym))) {
-    const d = data[s];
-    series[s] = new Map(d.rows.map((r) => [rowDay(r, d.gmtoffset), r.c]));
-    for (const k of series[s].keys()) if (k >= start) days.add(k);
+  const series = {}, days = new Set();
+  for (const sy of new Set(all.map((l) => l.sym))) {
+    const d = data[sy];
+    series[sy] = new Map(d.rows.map((r) => [rowDay(r, d.gmtoffset), r.c]));
+    for (const k of series[sy].keys()) if (k >= start) days.add(k);
   }
   const cal = [...days].sort((a, b) => a - b);
-  if (!cal.length) { el.innerHTML = `<div class="status">Not enough history yet.</div>`; return; }
+  if (!cal.length) return null;
   const lastClose = {};
-  for (const s in series) { let v = null; for (const [k, c] of series[s]) { if (k < start) v = c; } lastClose[s] = v; }
-  const pl = cal.map((D) => {
-    for (const s in series) if (series[s].has(D)) lastClose[s] = series[s].get(D);
-    let total = 0;
+  for (const sy in series) { let v = null; for (const [k, c] of series[sy]) if (k < start) v = c; lastClose[sy] = v; }
+  const pl = [], base = [];
+  for (const D of cal) {
+    const before = { ...lastClose };
+    for (const sy in series) if (series[sy].has(D)) lastClose[sy] = series[sy].get(D);
+    let total = 0, b = 0;
     for (const l of all) {
-      if (isoDay(l.date) > D) continue;
-      const sg = l.side === "long" ? 1 : -1;
-      if (l.closed && isoDay(l.closed.date) <= D) total += sg * (l.closed.price - l.price) * l.shares;
+      const opened = isoDay(l.date);
+      if (opened > D) continue;
+      const sg = l.side === "long" ? 1 : -1, closedDay = l.closed ? isoDay(l.closed.date) : Infinity;
+      if (closedDay <= D) total += sg * (l.closed.price - l.price) * l.shares;
       else if (lastClose[l.sym] != null) total += sg * (lastClose[l.sym] - l.price) * l.shares;
+      if (closedDay >= D) b += l.shares * (opened === D ? l.price : before[l.sym] ?? l.price);
     }
-    return total;
-  });
-  const t = cal.map((D) => D * 86400), col = last(pl) >= 0 ? "var(--up)" : "var(--down)";
+    pl.push(total); base.push(b);
+  }
+  const daily = pl.map((v, i) => v - (i ? pl[i - 1] : 0));
+  return { cal, t: cal.map((D) => D * 86400), daily, pct: daily.map((v, i) => base[i] ? v / base[i] * 100 : 0) };
+}
+function drawPnl(el, data) {
+  const S = pnlSeries(data);
+  if (!S) { el.innerHTML = `<div class="status">Not enough price history yet.</div>`; return; }
+  const fmtD = (tt, o) => new Date(tt * 1000).toLocaleDateString(undefined, { ...o, timeZone: "UTC" });
   lineChart(el, {
-    label: "Portfolio gain over time", t, series: [{ y: pl, color: col, fill: true }], hlines: [{ y: 0 }], dot: true, tickCount: 4,
+    label: "Daily portfolio gain and loss", t: S.t, tickCount: 4,
+    series: [{ y: S.daily, kind: "bars", color: "var(--accent)", barColor: (v) => v >= 0 ? "var(--up)" : "var(--down)" }],
+    hlines: [{ y: 0 }],
     yFmt: (v) => (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: Math.abs(v) < 100 ? 2 : 0 }),
-    xFmt: (tt) => new Date(tt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "2-digit", timeZone: "UTC" }),
-    tip: (i) => `${money(pl[i], true)} · ${new Date(t[i] * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" })}`,
+    xFmt: (tt) => fmtD(tt, { month: "short", day: "numeric" }),
+    tip: (i) => `${money(S.daily[i], true)} (${fmtPct(S.pct[i])}) · ${fmtD(S.t[i], { weekday: "short", year: "numeric", month: "short", day: "numeric" })}`,
   });
 }
 
