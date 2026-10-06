@@ -1359,18 +1359,21 @@ async function renderPortfolio(force) {
   // ---- per-lot and per-group numbers ----
   const openLots = lots.filter((l) => !l.closed), closedLots = lots.filter((l) => l.closed);
   const groups = new Map();
-  let longMV = 0, shortMV = 0, unreal = 0, cost = 0, day = 0, prevMV = 0;
+  let longMV = 0, shortMV = 0, unreal = 0, cost = 0;
   for (const l of openLots) {
     const d = data[l.sym], sg = l.side === "long" ? 1 : -1;
     const key = l.sym + "|" + l.side;
-    if (!groups.has(key)) groups.set(key, { sym: l.sym, side: l.side, lots: [], shares: 0, cost: 0, d, an: d ? analyze(d.rows, spy.data?.rows, l.sym === "SPY") : null });
+    if (!groups.has(key)) groups.set(key, { sym: l.sym, side: l.side, lots: [], shares: 0, cost: 0, day: 0, dayBase: 0, d, an: d ? analyze(d.rows, spy.data?.rows, l.sym === "SPY") : null });
     const g = groups.get(key);
     g.lots.push(l); g.shares += l.shares; g.cost += l.shares * l.price;
     if (!d) continue;
     const P = curPrice(d), pc = prevClose(d);
     l._gain = sg * (P - l.price) * l.shares; l._pct = sg * (P / l.price - 1) * 100;
     (l.side === "long" ? (longMV += l.shares * P) : (shortMV += l.shares * P));
-    unreal += l._gain; cost += l.shares * l.price; day += sg * (P - pc) * l.shares; prevMV += l.shares * pc;
+    // Today's change starts from yesterday's close, or from the entry price for a lot opened during the latest session.
+    const base = isoDay(l.date) >= rowDay(last(d.rows), d.gmtoffset) ? l.price : pc;
+    g.day += sg * (P - base) * l.shares; g.dayBase += base * l.shares;
+    unreal += l._gain; cost += l.shares * l.price;
   }
   let realized = 0, realizedCost = 0;
   for (const l of closedLots) { realized += (l.side === "long" ? 1 : -1) * (l.closed.price - l.price) * l.shares; realizedCost += l.price * l.shares; }
@@ -1381,7 +1384,7 @@ async function renderPortfolio(force) {
     const P = curPrice(g.d), sg = g.side === "long" ? 1 : -1;
     g.avg = g.cost / g.shares; g.P = P; g.mv = g.shares * P;
     g.gain = sg * (P * g.shares - g.cost); g.pct = g.gain / g.cost * 100;
-    g.day = sg * (P - prevClose(g.d)) * g.shares; g.dayPct = sg * (P / prevClose(g.d) - 1) * 100;
+    g.dayPct = g.dayBase ? g.day / g.dayBase * 100 : 0;
     g.weight = g.mv / totalExposure * 100;
   }
   gl.sort((a, b) => (b.mv ?? 0) - (a.mv ?? 0));
